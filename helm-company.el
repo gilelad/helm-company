@@ -53,6 +53,11 @@ Set it to nil if you don't want this limit."
 (defvar helm-company-help-window nil)
 (defvar helm-company-backend nil)
 
+(defun helm-company-call-backend (&rest args)
+  "Bridge between helm-company and company"
+  (let ((company-backend helm-company-backend))
+    (apply 'company-call-backend args)))
+
 (defun helm-company-init ()
   "Prepare helm for company."
   (helm-attrset 'company-candidates company-candidates)
@@ -60,7 +65,9 @@ Set it to nil if you don't want this limit."
   (setq helm-company-help-window nil)
   (if (<= (length company-candidates) 1)
       (helm-exit-minibuffer)
-    (setq helm-company-backend company-backend))
+    (setq helm-company-backend    company-backend
+          helm-company-candidates company-candidates
+          helm-company-common     company-common))
   (company-abort))
 
 (defun helm-company-action-insert (candidate)
@@ -73,26 +80,29 @@ Set it to nil if you don't want this limit."
 (defun helm-company-action-show-document (candidate)
   "Show the documentation of the CANDIDATE."
   (interactive)
-  (let ((buffer (funcall helm-company-backend 'doc-buffer candidate)))
+  (let ((selection (cl-find-if (lambda (s) (string-match-p candidate s)) helm-company-candidates))
+        (buffer (helm-company-call-backend 'doc-buffer selection)))
     (when buffer
       (display-buffer buffer))))
 
 (defun helm-company-show-doc-buffer (candidate)
   "Temporarily show the documentation buffer for the CANDIDATE."
   (interactive)
-  (let ((buffer (funcall helm-company-backend 'doc-buffer candidate)))
+  (let* ((selection (cl-find-if (lambda (s) (string-match-p candidate s)) helm-company-candidates))
+         (buffer (helm-company-call-backend 'doc-buffer selection)))
     (when buffer
       (if (and helm-company-help-window
                (window-live-p helm-company-help-window))
           (with-selected-window helm-company-help-window
-            (helm-company-display-document-buffer buffer))
+            (helm-company-display-persistent-buffer buffer))
         (setq helm-company-help-window
-              (helm-company-display-document-buffer buffer))))))
+              (helm-company-display-persistent-buffer buffer))))))
 
 (defun helm-company-find-location (candidate)
   "Find location of CANDIDATE."
   (interactive)
-  (let* ((location (save-excursion (funcall helm-company-backend 'location candidate)))
+  (let* ((selection (cl-find-if (lambda (s) (string-match-p candidate s)) helm-company-candidates))
+         (location (save-excursion (helm-company-call-backend 'location selection)))
          (pos (or (cdr location) (error "No location available")))
          (buffer (or (and (bufferp (car location)) (car location))
                      (find-file-noselect (car location) t))))
@@ -105,8 +115,32 @@ Set it to nil if you don't want this limit."
           (forward-line (1- pos))))
       (set-window-start nil (point)))))
 
-(defun helm-company-display-document-buffer (buffer)
-  "Temporarily show the documentation BUFFER."
+(defun helm-company-show-location (candidate)
+  "Temprarily show the location for the CANDIDATE"
+  (interactive)
+  (let* ((selection (cl-find-if (lambda (s) (string-match-p candidate s)) helm-company-candidates))
+         (location (save-excursion (helm-company-call-backend 'location selection)))
+         (pos (or (cdr location) (error "No location available")))
+         (buffer (or (and (bufferp (car location)) (car location))
+                     (find-file-noselect (car location) t))))
+    (when buffer
+      (setq helm-company-help-window
+            (if (and helm-company-help-window
+                     (window-live-p helm-company-help-window))
+                (with-selected-window helm-company-help-window
+                  (helm-company-display-location-buffer buffer))
+              (helm-company-display-persistent-buffer buffer)))
+      (with-selected-window helm-company-help-window
+        (save-restriction
+        (widen)
+        (if (bufferp (car location))
+            (goto-char pos)
+          (goto-char (point-min))
+          (forward-line (1- pos))))
+      (set-window-start nil (point))))))
+
+(defun helm-company-display-persistent-buffer (buffer)
+  "Temporarily show BUFFER in a persistent help-window."
   (with-current-buffer buffer
     (goto-char (point-min)))
   (display-buffer buffer
@@ -156,8 +190,9 @@ Set it to nil if you don't want this limit."
             (helm-attr 'company-candidates))
     :fuzzy-match helm-company-fuzzy-match
     :keymap helm-company-map
-    :persistent-action 'helm-company-show-doc-buffer
-    :persistent-help "Show documentation (If available)"
+    :persistent-action 'helm-company-show-location
+    ;;:persistent-action 'helm-company-show-doc-buffer
+    :persistent-help "Show location (If available)"
     :action helm-company-actions)
   "Helm source definition for recent files in current project.")
 
